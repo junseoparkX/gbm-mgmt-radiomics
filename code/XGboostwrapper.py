@@ -6,6 +6,7 @@ import argparse
 import pandas as pd
 import numpy as np
 from xgboost import XGBClassifier
+from sklearn.model_selection import GridSearchCV  # added for grid search
 
 def load_data():
     # Load train/test split from CSV files
@@ -15,22 +16,44 @@ def load_data():
     return X_train, y_train, X_test
 
 def xgb_select_features(X_train, y_train, top_k=38):
-    # XGBoost model with settings similar to the paper
-    model = XGBClassifier(
+    # XGBoost model with settings similar to the paper (fixed base params)
+    base_model = XGBClassifier(
         objective="binary:logistic",
         booster="gbtree",
-        eta=0.3,
+        eta=0.3,           # learning rate (called 'eta' in XGBoost core)
         gamma=0,
         max_depth=6,
         reg_lambda=1,
         eval_metric="logloss",
-        n_estimators=200,
-        subsample=0.8,
-        colsample_bytree=0.8,
         random_state=42,
     )
-    # Train on all training data
+
+    # Grid search ONLY on these three parameters (multiple values)
+    param_grid = {
+        "subsample": [0.6, 0.7, 0.8],
+        "colsample_bytree": [0.7, 0.8, 1.0],
+        "n_estimators": [80,100,120],
+    }
+
+    # 5-fold CV with ROC AUC scoring; refit the best model
+    grid_search = GridSearchCV(
+        estimator=base_model,
+        param_grid=param_grid,
+        scoring="roc_auc",
+        cv=5,
+        n_jobs=-1,
+        verbose=0,
+        refit=True,
+    )
+    grid_search.fit(X_train, y_train)
+    model = grid_search.best_estimator_
+
+    print(f"[GridSearch] Best params: {grid_search.best_params_}")
+    print(f"[GridSearch] Best CV AUC: {grid_search.best_score_:.4f}")
+
+    # Train best model on all training data (redundant but explicit)
     model.fit(X_train, y_train)
+
     # Get feature importance scores
     importances = model.feature_importances_
     # Pick top_k features by importance (descending)
@@ -59,7 +82,7 @@ def main(top_k):
     pd.DataFrame({
         "feature": X_train.columns[idx],
         "importance": importances[idx]
-    }).to_csv("xgb_feature_importance.csv", index=False)
+    }).to_csv("./data/xgb_feature_importance.csv", index=False)
 
     print(f"[XGBoost FS] top {top_k} features saved to X_train_xgbsel.csv / X_test_xgbsel.csv")
 
@@ -68,4 +91,3 @@ if __name__ == "__main__":
     parser.add_argument("--top_k", type=int, default=38, help="number of top features to keep")
     args = parser.parse_args()
     main(args.top_k)
-
